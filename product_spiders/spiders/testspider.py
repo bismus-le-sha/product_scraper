@@ -12,110 +12,123 @@ class TestSpiderSpider(scrapy.Spider):
     name = "testspider"
     allowed_domains = ["www.perekrestok.ru"]
     custom_settings = {
-        # Отключение headless режима для отладки
         'PLAYWRIGHT_LAUNCH_OPTIONS': {'headless': False},
     }
 
     def start_requests(self):
-        self.logger.info("Запуск парсинга...")
-        yield scrapy.Request(
-            url="https://www.perekrestok.ru/cat/32/p/salat-iz-svekly-s-cesnokom-perekrestok-select-200g-4252526",
-            meta={
-                "playwright": True,
-                "playwright_include_page": True,
-                "playwright_page_coroutines": [
-                    PageMethod("wait_for_selector",
-                               "networkidle"),
-                    PageMethod("evaluate", "window.scrollBy(0, 5000)"),
-                    PageMethod("wait_for_selector",
-                               "button:has-text('О товаре')"),
-                    PageMethod(
-                        'evaluate', "page.mouse.wheel(0, 150000);"),
-                    PageMethod("click", "button:has-text('О товаре')"),
-                    PageMethod("wait_for_timeout", 15000),
-                ],
-            },
-            callback=self.parse,
-            errback=self.error_handler
+        yield scrapy.Request("https://www.perekrestok.ru/cat/",
+                             meta={
+                                 "playwright": True,
+                                 "playwright_include_page": True,
+                                 "playwright_page_coroutines": [PageMethod(
+                                     "wait_for_selector", "div.category-card__title")]
+                             },
+                             callback=self.parse_categories
+                             )
+
+    def parse_categories(self, response):
+        category_map = utils.extract_links(
+            response,
+            'div.sc-gsTEea.hfvcqA div.Box-sc-149qidf-0 a.sc-kstqJO',
+            'div.category-card__title',
         )
 
-    async def parse(self, response):
-        # Получаем объект Playwright Page
-        playwright_page = response.meta["playwright_page"]
+        self.logger.info(f"Collected {len(category_map)} categories in map.")
+        self.logger.debug(f"Category map: {category_map}")
 
-        # Список для хранения данных ответов
-        captured_responses = []
+        filtered_map = utils.filter_items(category_map, excluded_categories)
 
-        # Устанавливаем обработчик для ответов
-        def handle_response(res):
-            if "/api/customer/1.4.1.0/catalog/product/plu" in res.url:
-                captured_responses.append(res)
+        self.logger.info(f"Using {len(filtered_map)} filtered categories.")
 
-        playwright_page.on("response", handle_response)
+        # Ограничение на обработку только одной категории
+        for name, url in list(filtered_map.items())[:1]:
+            self.logger.info(f"Processing category: {name} ({url})")
+            yield scrapy.Request(
+                url=url,
+                meta={"playwright": True, "playwright_page_coroutines": [
+                    PageMethod("wait_for_selector",
+                               "a.products-slider__header")
+                ]},
+                callback=self.parse_subcategory,
+            )
+
+    def parse_subcategory(self, response):
+        self.logger.info(f"Parsing product subcategory from {response.url}")
+
+        subcategory_link_selector = 'a.products-slider__header'
+        subcategory_name_selector = 'h2.products-slider__title'
 
         try:
-            # Дожидаемся выполнения JavaScript на странице
-            await playwright_page.wait_for_timeout(5000)
-
-            # Обрабатываем захваченные запросы
-            for res in captured_responses:
-                try:
-                    # Получаем тело ответа
-                    body = await res.body()
-                    self.logger.info(f"URL запроса: {res.url}")
-                    self.logger.info(f"Тело ответа: {body.decode('utf-8')}")
-
-                    # Преобразуем тело ответа в JSON
-                    json_data = await res.json()  # Используйте .json() для объекта response
-                    self.logger.info(f"JSON данные: {json_data}")
-
-                    yield json_data  # Возвращаем данные в Scrapy pipeline
-
-                except Exception as e:
-                    self.logger.error(f"Ошибка при обработке ответа: {e}")
-
-        finally:
-            # Закрываем страницу в любом случае
-            await playwright_page.close()
-
-    def error_handler(self, failure):
-        """Обрабатывает ошибки запросов."""
-        self.logger.error(f"Ошибка запроса: {failure}")
-
-    # async def parse_product_detail(self, response):
-    #     page = response.meta['playwright_page']
-
-    #     results = []
-
-    #     async def handle_response(playwright_response):
-    #         result = self.check_json(playwright_response)
-    #         if result:
-    #             results.append(result)
-
-    #     page.on("response", handle_response)
-
-    #     yield results
-
-    async def parse_product_detail(self, response):
-        # Парсинг данных после нажатия
-        allergens = response.xpath(
-            '//div[@class="product-info-string-value"]//a[@class="product-feature-link"]/text()').getall()
-
-        # Для второго элемента (текстовые аллергены):
-        additional_info = response.xpath(
-            '//div[@class="product-info-string-value"]/text()').get()
-
-        # Логирование, чтобы проверить успешность парсинга
-        if additional_info:
+            subcategory_map = utils.extract_links(
+                response, subcategory_link_selector, subcategory_name_selector
+            )
             self.logger.info(
-                "Button click successful, additional info loaded.")
-        else:
-            self.logger.warning(
-                "Button click failed or additional info not loaded.")
+                f"Collected {len(subcategory_map)} product subcategories.")
+            self.logger.debug(f"Subcategory map: {subcategory_map}")
 
-        yield {
+            filtered_subcategories = utils.filter_items(
+                subcategory_map, excluded_subcategories)
 
-            'additional_info': additional_info if additional_info else '',
+            self.logger.info(
+                f"Using {len(filtered_subcategories)} filtered subcategories.")
 
-            'allergens': [allergen.strip() for allergen in allergens] if allergens else []
-        }
+            # Ограничение на обработку только одной подкатегории
+            for name, url in list(filtered_subcategories.items())[:1]:
+                self.logger.info(f"Processing subcategory: {name} ({url})")
+                yield scrapy.Request(
+                    url=url,
+                    meta={"playwright": True, "playwright_page_coroutines": [
+                        PageMethod("wait_for_selector",
+                                   "div.product-card__title")
+                    ]},
+                    callback=self.parse_product,
+                )
+
+        except Exception as e:
+            self.logger.error(
+                f"Error during product subcategories parsing: {e}")
+
+    def parse_product(self, response):
+        product_links = response.css(
+            'a.product-card__link::attr(href)').getall()
+
+        unique_links = set(product_links)
+
+        for link in unique_links:
+            absolute_link = response.urljoin(link)
+
+        yield scrapy.Request(
+            absolute_link,
+            meta={
+                "playwright": "True",
+                "playwright_include_page": "True",
+                "playwright_page_coroutines": [
+                    PageMethod("wait_for_selector", "div.product-tabs")]},
+            callback=self.parse_product_detail)
+
+    def parse_product_detail(self, response):
+        item = ProductSpidersItem()
+
+        item['label'] = response.xpath(
+            '//h1[@class="sc-fubCzh ibFUIH product__title" and @itemprop="name"]/text()'
+        ).get()
+
+        item['image'] = response.xpath(
+            '//img[@itemprop="image"]/@src'
+        ).get()
+
+        item['ingredients'] = response.xpath(
+            '//p[@class="sc-dWddBi kBxBKK"]/text()').get()
+
+        additional_info = response.xpath(
+            '//div[@class="product-info-string-value"]/text()'
+        ).get()
+        item['additional_info'] = additional_info if additional_info else ''
+
+        allergens = response.xpath(
+            '//div[@class="product-info-string-value"]/a/text()'
+        ).getall()
+        item['allergens'] = [allergen.strip()
+                             for allergen in allergens] if allergens else []
+
+        yield item

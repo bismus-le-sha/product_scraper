@@ -7,9 +7,8 @@ import scrapy
 
 
 class ProductSpidersItem(scrapy.Item):
-    lable = scrapy.Field
-    image = scrapy.Field
-    ingredients = scrapy.Field
-    additional_info = scrapy.Field
-    allergens = scrapy.Field
-
+    label = scrapy.Field()
+    image = scrapy.Field()
+    ingredients = scrapy.Field()
+    additional_info = scrapy.Field()
+    allergens = scrapy.Field()

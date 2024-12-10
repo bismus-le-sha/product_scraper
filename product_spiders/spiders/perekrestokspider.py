@@ -116,7 +116,7 @@ class PerekrestokspidereSpider(scrapy.Spider):
     def parse_product_detail(self, response):
         item = ProductSpidersItem()
 
-        item['lable'] = response.xpath(
+        item['label'] = response.xpath(
             '//h1[@class="sc-fubCzh ibFUIH product__title" and @itemprop="name"]/text()'
         ).get()
 
